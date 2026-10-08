@@ -1,0 +1,48 @@
+rule_files:
+  - ../../prometheus/rules/slo/storefront.generated.yml
+evaluation_interval: 1m
+tests:
+  # 100% of storefront requests fail with 500 for 80 minutes: both availability alerts must fire.
+  - interval: 1m
+    input_series:
+      - series: 'traces_span_metrics_calls_total{service_name="storefront",span_kind="SPAN_KIND_SERVER",http_route="/api/products/:id",http_response_status_code="500"}'
+        values: '0+60x80'
+    alert_rule_test:
+      - eval_time: 80m
+        alertname: StorefrontAvailabilityBurn
+        exp_alerts:
+          - exp_labels: {category: availability, severity: page, sloth_id: storefront-availability, sloth_service: storefront, sloth_slo: availability, sloth_severity: page, owner: platform}
+            exp_annotations:
+              budget_left: '0.00'
+              burn_window: 1h
+              burn_rate: 200.0x
+              dashboard_url: http://127.0.0.1:3000/d/e2t-slo?var-slo=availability
+              runbook_url: https://github.com/mqa8668/edge-to-trace/blob/main/docs/runbooks/storefront-availability-burn.md
+              slo_objective: 99.5%
+              summary: storefront availability SLO error budget burn rate is over expected.
+              tempo_url: http://127.0.0.1:3000/explore?schemaVersion=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22storefront%5C%22%20%26%26%20status%20%3D%20error%20%7D%22%7D%5D%7D%7D
+              title: '(page) storefront availability SLO error budget burn rate is too fast.'
+          - exp_labels: {category: availability, severity: ticket, sloth_id: storefront-availability, sloth_service: storefront, sloth_slo: availability, sloth_severity: ticket, owner: platform}
+            exp_annotations:
+              budget_left: '0.00'
+              burn_window: 1d
+              burn_rate: 200.0x
+              dashboard_url: http://127.0.0.1:3000/d/e2t-slo?var-slo=availability
+              runbook_url: https://github.com/mqa8668/edge-to-trace/blob/main/docs/runbooks/storefront-availability-burn.md
+              slo_objective: 99.5%
+              summary: storefront availability SLO error budget burn rate is over expected.
+              tempo_url: http://127.0.0.1:3000/explore?schemaVersion=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22storefront%5C%22%20%26%26%20status%20%3D%20error%20%7D%22%7D%5D%7D%7D
+              title: '(ticket) storefront availability SLO error budget burn rate is too fast.'
+
+  # Healthy traffic only: nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'traces_span_metrics_calls_total{service_name="storefront",span_kind="SPAN_KIND_SERVER",http_route="/api/products/:id",http_response_status_code="200"}'
+        values: '0+60x80'
+    alert_rule_test:
+      - eval_time: 80m
+        alertname: StorefrontAvailabilityBurn
+        exp_alerts: []
+      - eval_time: 80m
+        alertname: StorefrontLatencyBurn
+        exp_alerts: []

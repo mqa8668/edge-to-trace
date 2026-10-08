@@ -1,0 +1,54 @@
+groups:
+  - name: platform
+    rules:
+      - alert: Watchdog
+        expr: vector(1)
+        labels: {severity: none}
+        annotations:
+          summary: Dead man's switch, always firing
+          runbook_url: https://github.com/mqa8668/edge-to-trace/blob/main/docs/runbooks/watchdog.md
+      - alert: TargetDown
+        expr: up == 0
+        for: 2m
+        labels: {severity: ticket}
+        annotations:
+          summary: "Scrape target {{ $labels.job }} is down"
+          runbook_url: https://github.com/mqa8668/edge-to-trace/blob/main/docs/runbooks/target-down.md
+      - alert: PrometheusRuleEvaluationFailures
+        expr: increase(prometheus_rule_evaluation_failures_total[5m]) > 0
+        labels: {severity: ticket}
+        annotations:
+          summary: Prometheus rule evaluation is failing
+          runbook_url: https://github.com/mqa8668/edge-to-trace/blob/main/docs/runbooks/prometheus-rule-evaluation-failures.md
+      - alert: AlertmanagerNotificationsFailing
+        expr: rate(alertmanager_notifications_failed_total[5m]) > 0
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "Alertmanager cannot deliver to {{ $labels.integration }}"
+          runbook_url: https://github.com/mqa8668/edge-to-trace/blob/main/docs/runbooks/alertmanager-notifications-failing.md
+      - alert: OtelCollectorExportFailures
+        expr: |
+          rate(otelcol_exporter_send_failed_spans_total[5m]) > 0
+          or rate(otelcol_exporter_send_failed_metric_points_total[5m]) > 0
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: OpenTelemetry Collector fails to export telemetry
+          runbook_url: https://github.com/mqa8668/edge-to-trace/blob/main/docs/runbooks/otel-collector-export-failures.md
+      - alert: LokiIngestionFailing
+        expr: |
+          sum(rate(loki_discarded_samples_total[5m])) > 0
+          or sum(rate(loki_request_duration_seconds_count{route="loki_api_v1_push",status_code=~"5.."}[5m])) > 0
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: Loki is rejecting or failing log pushes
+          runbook_url: https://github.com/mqa8668/edge-to-trace/blob/main/docs/runbooks/loki-ingestion-failing.md
+      - alert: PostgresDown
+        expr: pg_up == 0
+        for: 1m
+        labels: {severity: page}
+        annotations:
+          summary: Postgres is unreachable from the exporter
+          runbook_url: https://github.com/mqa8668/edge-to-trace/blob/main/docs/runbooks/postgres-down.md

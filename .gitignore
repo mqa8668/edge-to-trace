@@ -1,0 +1,14 @@
+.env
+.env.tmp
+secrets/
+*.pem
+*.key
+.DS_Store
+# build output
+_build/
+deps/
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+compose.vm.yaml

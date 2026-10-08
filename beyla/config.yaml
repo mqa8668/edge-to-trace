@@ -1,0 +1,19 @@
+# Instruments only the Go catalog service (no SDK in the app). Traces only: RED metrics come from the collector's spanmetrics.
+discovery:
+  instrument:
+    - name: catalog
+      open_ports: "8081"
+      exe_path: "*catalog"
+ebpf:
+  context_propagation: disabled
+otel_traces_export:
+  endpoint: http://otel-collector:4318
+  protocol: http/protobuf
+  # Beyla exports traces only, never its own RED metrics.
+otel_metrics_export:
+  features: []
+internal_metrics:
+  prometheus:
+    port: 8999
+    path: /metrics
+log_level: info

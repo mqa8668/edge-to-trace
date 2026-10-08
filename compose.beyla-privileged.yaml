@@ -1,0 +1,5 @@
+# Use when `make doctor` says the capability set is not enough (some Docker Desktop and hardened kernels).
+# Enable with BEYLA_PRIVILEGED=1 in .env.
+services:
+  beyla:
+    privileged: true

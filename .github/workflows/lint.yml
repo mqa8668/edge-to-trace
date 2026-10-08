@@ -1,0 +1,84 @@
+name: lint
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Compose config (all profiles)
+        run: |
+          scripts/bootstrap.sh
+          docker compose --profile lite config -q
+          docker compose --profile lite --profile tools config -q
+      - name: hadolint
+        run: |
+          for f in apps/*/Dockerfile db/Dockerfile; do
+            echo "hadolint $f"
+            docker run --rm -i hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d \
+              hadolint --ignore DL3008 - < "$f"
+          done
+      - name: shellcheck
+        run: shellcheck -S warning scripts/*.sh tests/*.sh
+      - name: Image pins and runbook links
+        run: |
+          scripts/check-pins.sh
+          scripts/check-runbooks.sh
+      - name: gitleaks (CLI, full history)
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          curl -sSfL -o gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/gl" && tar -xzf gitleaks.tgz -C "$RUNNER_TEMP/gl" gitleaks
+          "$RUNNER_TEMP/gl/gitleaks" git . --no-banner --redact
+
+  config:
+    name: prometheus, alertmanager, otel, slo and dashboard checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: promtool check config and rules
+        run: |
+          docker run --rm --entrypoint promtool -v "$PWD:/w" -w /w prom/prometheus:v3.13.4@sha256:87861b8cf91579109319ebc300f3f1060e6da9c05d6ae8ad15a20c879e84e32e check config prometheus/prometheus.yml
+          docker run --rm --entrypoint promtool -v "$PWD:/w" -w /w prom/prometheus:v3.13.4@sha256:87861b8cf91579109319ebc300f3f1060e6da9c05d6ae8ad15a20c879e84e32e check rules prometheus/rules/*.yml prometheus/rules/slo/*.yml
+      - name: promtool unit tests
+        run: docker run --rm --entrypoint promtool -v "$PWD:/w" -w /w prom/prometheus:v3.13.4@sha256:87861b8cf91579109319ebc300f3f1060e6da9c05d6ae8ad15a20c879e84e32e test rules tests/prometheus/platform_test.yml tests/prometheus/slo_test.yml
+      - name: amtool config and routes
+        run: tests/alertmanager_routes.sh
+      - name: sloth drift (generated rules must match slo/*.yml)
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/w" -w /w ghcr.io/slok/sloth@sha256:f0f0075b0d45c1cf684e92947508cc1d5bf573925f785f803a439b2306c8b9a5 generate -i slo/storefront.yml -o prometheus/rules/slo/storefront.generated.yml
+          git diff --exit-code prometheus/rules/slo
+      - name: Dashboards drift and sanity
+        run: |
+          python3 scripts/gen-dashboards.py
+          git diff --exit-code grafana/dashboards
+          python3 - <<'PY'
+          import glob, json
+          uids = []
+          for f in glob.glob("grafana/dashboards/*.json"):
+              d = json.load(open(f))
+              uids.append(d["uid"])
+              ids = [p["id"] for p in d["panels"]]
+              assert len(ids) == len(set(ids)), f
+          assert len(uids) == len(set(uids)), "duplicate dashboard uid"
+          PY
+      - name: OpenTelemetry Collector config validates
+        run: |
+          IMG=$(grep -o 'otel/opentelemetry-collector-contrib:[^ ]*' compose.yaml | head -1)
+          docker run --rm -e TAIL_SAMPLING_BASELINE_PERCENT=100 -v "$PWD/otel-collector/config.yaml:/c.yaml:ro" "$IMG" validate --config=/c.yaml
+      - name: Alloy config formatting
+        run: |
+          IMG=$(grep -o 'grafana/alloy:[^ ]*' compose.yaml | head -1)
+          docker run --rm -v "$PWD/alloy/config.alloy:/c.alloy:ro" "$IMG" fmt /c.alloy | diff -u alloy/config.alloy -

@@ -1,0 +1,323 @@
+# edge-to-trace. Profiles: lite (v0.1). edge and full arrive in later milestones.
+name: e2t
+
+x-app-env: &otel-env
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
+  OTEL_TRACES_EXPORTER: ${OTEL_TRACES_EXPORTER:-otlp}
+  OTEL_METRICS_EXPORTER: ${OTEL_METRICS_EXPORTER:-otlp}
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+  read_only: true
+
+networks:
+  app: {}
+  obs: {}
+
+volumes:
+  pgdata: {}
+  prom-data: {}
+  loki-data: {}
+  tempo-data: {}
+  grafana-data: {}
+
+services:
+  postgres:
+    <<: *hardening
+    build:
+      context: ./db
+    image: e2t/db:dev
+    profiles: [lite]
+    user: postgres
+    environment:
+      POSTGRES_DB: acme
+      POSTGRES_USER: acme
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run "make bootstrap" (or "make up") to create .env}
+    volumes:
+      - pgdata:/var/lib/postgresql
+    tmpfs: [/tmp, /run/postgresql]
+    networks: [app]
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U acme -d acme -h 127.0.0.1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  catalog:
+    <<: *hardening
+    build:
+      context: ./apps/catalog
+    image: e2t/catalog:dev
+    profiles: [lite]
+    labels: {e2t.logs: "true"}
+    environment:
+      DATABASE_URL: postgres://acme:${POSTGRES_PASSWORD}@postgres:5432/acme?sslmode=disable
+      CHAOS_TOKEN: ${CHAOS_TOKEN:-}
+      PORT: "8081"
+    networks: [app]
+    mem_limit: 64m
+    depends_on:
+      postgres: {condition: service_healthy}
+    # healthcheck is defined in the image (distroless: the binary probes itself)
+
+  recs:
+    <<: *hardening
+    build:
+      context: ./apps/recs
+    image: e2t/recs:dev
+    profiles: [lite]
+    labels: {e2t.logs: "true"}
+    environment:
+      <<: *otel-env
+      OTEL_SERVICE_NAME: recs
+      OTEL_RESOURCE_ATTRIBUTES: service.namespace=acme,service.version=${GIT_SHA:-dev},deployment.environment.name=lab
+      CATALOG_URL: http://catalog:8081
+      CHAOS_TOKEN: ${CHAOS_TOKEN:-}
+    networks: [app]
+    mem_limit: 192m
+    tmpfs: [/tmp]
+    depends_on:
+      catalog: {condition: service_healthy}
+
+  storefront:
+    <<: *hardening
+    build:
+      context: ./apps/storefront
+    image: e2t/storefront:dev
+    profiles: [lite]
+    labels: {e2t.logs: "true"}
+    environment:
+      <<: *otel-env
+      OTEL_SERVICE_NAME: storefront
+      OTEL_RESOURCE_ATTRIBUTES: service.namespace=acme,service.version=${GIT_SHA:-dev},deployment.environment.name=lab
+      CATALOG_URL: http://catalog:8081
+      RECS_URL: http://recs:8082
+      CHAOS_TOKEN: ${CHAOS_TOKEN:-}
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks: [app]
+    mem_limit: 256m
+    tmpfs: [/tmp]
+    depends_on:
+      catalog: {condition: service_healthy}
+      recs: {condition: service_healthy}
+
+  postgres-exporter:
+    <<: *hardening
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.20.1@sha256:ac5ec343104fae0e2d84a27bb8d69b38430a11910c5382cad85d478d2bab713e
+    profiles: [lite]
+    user: "65534:65534"
+    environment:
+      DATA_SOURCE_NAME: postgresql://acme:${POSTGRES_PASSWORD}@postgres:5432/acme?sslmode=disable
+    networks: [app]
+    mem_limit: 32m
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  otel-collector:
+    <<: *hardening
+    image: otel/opentelemetry-collector-contrib:0.162.0@sha256:39923a8e431bd1f57be82411999d389fcfe40857492e4365456d97a4c1f74be6
+    profiles: [lite]
+    command: ["--config=/etc/otelcol/config.yaml"]
+    environment:
+      TAIL_SAMPLING_BASELINE_PERCENT: ${TAIL_SAMPLING_BASELINE_PERCENT:-100}
+    volumes:
+      - ./otel-collector/config.yaml:/etc/otelcol/config.yaml:ro
+    networks: [app, obs]
+    mem_limit: 256m
+
+  tempo:
+    <<: *hardening
+    image: grafana/tempo:3.1.0@sha256:3076b8dcdfb32fd6bc5ccef85e7b7313e6199b9cb84366257fc17ecb696db5fd
+    profiles: [lite]
+    command: ["-config.file=/etc/tempo/config.yaml"]
+    volumes:
+      - ./tempo/config.yaml:/etc/tempo/config.yaml:ro
+      - tempo-data:/var/tempo
+    networks: [obs]
+    # 512m was OOM-killed during a chaos run with trace queries; Tempo 3 peaks near 520 MiB.
+    mem_limit: 768m
+
+  loki:
+    <<: *hardening
+    image: grafana/loki:3.7.8@sha256:1107dd5274e0ada47e42472b7a7e71f3b2a2fe878878108f3e2f9e51528f0193
+    profiles: [lite]
+    command: ["-config.file=/etc/loki/config.yaml"]
+    volumes:
+      - ./loki/config.yaml:/etc/loki/config.yaml:ro
+      - loki-data:/loki
+    tmpfs: [/tmp]
+    networks: [obs]
+    mem_limit: 384m
+
+  docker-socket-proxy:
+    # The only container that touches the Docker socket: read-only, containers endpoint only.
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    image: tecnativa/docker-socket-proxy:v0.5.0@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
+    profiles: [lite]
+    environment:
+      CONTAINERS: "1"
+      NETWORKS: "1"   # discovery.docker reads network details; read-only like the rest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [obs]
+    mem_limit: 32m
+
+  alloy:
+    <<: *hardening
+    image: grafana/alloy:v1.20.1@sha256:2aa2099af76c0098d4af7a4d6e48f86cb66dc1a000222ad927a1c67c6542d13f
+    profiles: [lite]
+    user: "65534:65534"
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/tmp/alloy
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+    tmpfs: [/tmp]
+    networks: [obs]
+    mem_limit: 192m
+    depends_on: [docker-socket-proxy, loki]
+
+  prometheus:
+    <<: *hardening
+    image: prom/prometheus:v3.13.4@sha256:87861b8cf91579109319ebc300f3f1060e6da9c05d6ae8ad15a20c879e84e32e
+    profiles: [lite]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --storage.tsdb.retention.size=2GB
+      - --web.enable-otlp-receiver
+      - --enable-feature=exemplar-storage
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - prom-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    networks: [app, obs]
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9090/-/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  alertmanager:
+    <<: *hardening
+    image: prom/alertmanager:v0.34.1@sha256:e9733bafb1bdef9b00e25a21f8f99dc26a22224bf16641ad754d1649f4c3357a
+    profiles: [lite]
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./alertmanager/templates:/etc/alertmanager/templates:ro
+    tmpfs: [/alertmanager]
+    ports:
+      - "127.0.0.1:9093:9093"
+    networks: [obs]
+    mem_limit: 64m
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9093/-/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+  alert-sink:
+    <<: *hardening
+    build:
+      context: ./apps/alert-sink
+    image: e2t/alert-sink:dev
+    profiles: [lite]
+    labels: {e2t.logs: "true"}
+    environment:
+      ALERT_TEMPLATE: /etc/alertmanager/templates/telegram.tmpl
+    volumes:
+      - ./alertmanager/templates:/etc/alertmanager/templates:ro
+    ports:
+      - "127.0.0.1:9095:9095"
+    networks: [obs]
+    mem_limit: 32m
+
+  grafana:
+    <<: *hardening
+    image: grafana/grafana:13.2.3@sha256:b28bae15e219c998fb0e0424ed724930cc61b1f61fb404d47c862f9a23f9e572
+    profiles: [lite]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?run "make bootstrap" to create .env}
+      GF_AUTH_ANONYMOUS_ENABLED: ${GRAFANA_ANONYMOUS_VIEWER:-true}
+      # Lets the anonymous viewer open Explore (exemplar and trace links need it). Off by default; `make demo` turns it on.
+      GF_USERS_VIEWERS_CAN_EDIT: ${GRAFANA_VIEWERS_CAN_EDIT:-false}
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+    volumes:
+      - ./grafana/grafana.ini:/etc/grafana/grafana.ini:ro
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    tmpfs: [/tmp]
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks: [obs]
+    # 384m was OOM-killed repeatedly with several dashboards and Explore open (about 300 MiB heap plus 195 MiB page cache).
+    mem_limit: 640m
+    depends_on: [prometheus, loki, tempo]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+
+  beyla:
+    # Intentionally powerful: eBPF needs these capabilities. See SECURITY.md and `make doctor`.
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    image: grafana/beyla:3.38.0@sha256:356aec0e9e35a180fe0f7adb3704f1987bd0fab6927d70195eb828d96a27938b
+    profiles: [lite]
+    pid: "service:catalog"
+    cap_drop: [ALL]
+    cap_add: [BPF, PERFMON, SYS_PTRACE, NET_RAW, DAC_READ_SEARCH, CHECKPOINT_RESTORE, SYS_ADMIN]
+    environment:
+      BEYLA_CONFIG_PATH: /etc/beyla/config.yaml
+      BEYLA_ENFORCE_SYS_CAPS: "1"
+    volumes:
+      - ./beyla/config.yaml:/etc/beyla/config.yaml:ro
+    networks: [app]
+    # 256m is not enough: eBPF map memory is charged to the container cgroup and map creation fails with ENOMEM.
+    mem_limit: 512m
+    depends_on:
+      catalog: {condition: service_healthy}
+      otel-collector: {condition: service_started}
+
+  k6:
+    <<: *hardening
+    image: grafana/k6:2.3.0@sha256:9c2dee7f8ed74d317e4027c06a10f169b625638189de8d4555d0b3486a5aeb34
+    profiles: [lite]
+    command: ["run", "--quiet", "/scripts/traffic.js"]
+    environment:
+      BASE_URL: http://storefront:8080
+    volumes:
+      - ./loadgen/k6/traffic.js:/scripts/traffic.js:ro
+    tmpfs: [/tmp]
+    networks: [app]
+    mem_limit: 128m
+    depends_on:
+      storefront: {condition: service_healthy}
+
+  # Helper for scripts: reaches internal ports (chaos admin, health) without publishing them.
+  toolbox:
+    <<: *hardening
+    image: curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777
+    profiles: [tools]
+    entrypoint: ["curl"]
+    networks: [app, obs]
+    mem_limit: 32m

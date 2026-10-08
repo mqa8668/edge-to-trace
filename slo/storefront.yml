@@ -1,0 +1,47 @@
+version: prometheus/v1
+service: storefront
+labels:
+  owner: platform
+slos:
+  - name: availability
+    objective: 99.5
+    description: Share of /api/* requests that do not fail with 5xx. 4xx are client errors and do not burn budget.
+    sli:
+      events:
+        error_query: |
+          (sum(rate(traces_span_metrics_calls_total{service_name="storefront",span_kind="SPAN_KIND_SERVER",http_route=~"/api/.*",http_response_status_code=~"5.."}[{{.window}}])) or vector(0))
+        total_query: |
+          sum(rate(traces_span_metrics_calls_total{service_name="storefront",span_kind="SPAN_KIND_SERVER",http_route=~"/api/.*"}[{{.window}}]))
+    alerting:
+      name: StorefrontAvailabilityBurn
+      labels: {category: availability}
+      annotations:
+        runbook_url: https://github.com/mqa8668/edge-to-trace/blob/main/docs/runbooks/storefront-availability-burn.md
+        dashboard_url: http://127.0.0.1:3000/d/e2t-slo?var-slo=availability
+        slo_objective: "99.5%"
+        budget_left: '{{ with query "clamp_min(slo:period_error_budget_remaining:ratio{sloth_id=\"storefront-availability\"} * 100, 0)" }}{{ . | first | value | printf "%.2f" }}{{ end }}'
+        tempo_url: "http://127.0.0.1:3000/explore?schemaVersion=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22storefront%5C%22%20%26%26%20status%20%3D%20error%20%7D%22%7D%5D%7D%7D"
+      page_alert: {labels: {severity: page}, annotations: {burn_window: 1h, burn_rate: '{{ with query "slo:sli_error:ratio_rate1h{sloth_id=\"storefront-availability\"} / on(sloth_id) slo:error_budget:ratio{sloth_id=\"storefront-availability\"}" }}{{ . | first | value | printf "%.1f" }}x{{ end }}'}}
+      ticket_alert: {labels: {severity: ticket}, annotations: {burn_window: 1d, burn_rate: '{{ with query "slo:sli_error:ratio_rate1d{sloth_id=\"storefront-availability\"} / on(sloth_id) slo:error_budget:ratio{sloth_id=\"storefront-availability\"}" }}{{ . | first | value | printf "%.1f" }}x{{ end }}'}}
+  - name: latency
+    objective: 99
+    description: 99% of /api/* requests complete in under 300 ms.
+    sli:
+      events:
+        error_query: |
+          sum(rate(traces_span_metrics_duration_milliseconds_count{service_name="storefront",span_kind="SPAN_KIND_SERVER",http_route=~"/api/.*"}[{{.window}}]))
+          -
+          sum(rate(traces_span_metrics_duration_milliseconds_bucket{service_name="storefront",span_kind="SPAN_KIND_SERVER",http_route=~"/api/.*",le="300"}[{{.window}}]))
+        total_query: |
+          sum(rate(traces_span_metrics_duration_milliseconds_count{service_name="storefront",span_kind="SPAN_KIND_SERVER",http_route=~"/api/.*"}[{{.window}}]))
+    alerting:
+      name: StorefrontLatencyBurn
+      labels: {category: latency}
+      annotations:
+        runbook_url: https://github.com/mqa8668/edge-to-trace/blob/main/docs/runbooks/storefront-latency-burn.md
+        dashboard_url: http://127.0.0.1:3000/d/e2t-slo?var-slo=latency
+        slo_objective: "99% < 300ms"
+        budget_left: '{{ with query "clamp_min(slo:period_error_budget_remaining:ratio{sloth_id=\"storefront-latency\"} * 100, 0)" }}{{ . | first | value | printf "%.2f" }}{{ end }}'
+        tempo_url: "http://127.0.0.1:3000/explore?schemaVersion=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22storefront%5C%22%20%26%26%20duration%20%3E%20300ms%20%7D%22%7D%5D%7D%7D"
+      page_alert: {labels: {severity: page}, annotations: {burn_window: 1h, burn_rate: '{{ with query "slo:sli_error:ratio_rate1h{sloth_id=\"storefront-latency\"} / on(sloth_id) slo:error_budget:ratio{sloth_id=\"storefront-latency\"}" }}{{ . | first | value | printf "%.1f" }}x{{ end }}'}}
+      ticket_alert: {labels: {severity: ticket}, annotations: {burn_window: 1d, burn_rate: '{{ with query "slo:sli_error:ratio_rate1d{sloth_id=\"storefront-latency\"} / on(sloth_id) slo:error_budget:ratio{sloth_id=\"storefront-latency\"}" }}{{ . | first | value | printf "%.1f" }}x{{ end }}'}}

@@ -1,0 +1,42 @@
+name: smoke
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  smoke:
+    name: boot lite and run scripts/smoke.sh
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Start the stack
+        run: make up
+      - name: Beyla check with a documented fallback
+        run: |
+          # Hosted runners run Linux 6.x with BTF, so the capability set normally works.
+          # If Beyla cannot attach, retry once with the privileged override (see docs/troubleshooting.md).
+          sleep 20
+          if ! scripts/doctor.sh; then
+            echo "::warning::Beyla did not attach with capabilities only; retrying with BEYLA_PRIVILEGED=1"
+            sed -i 's/^BEYLA_PRIVILEGED=.*/BEYLA_PRIVILEGED=1/' .env
+            make up
+            sleep 20
+            scripts/doctor.sh
+          fi
+      - name: Smoke test
+        run: scripts/smoke.sh
+      - name: Resource snapshot
+        if: always()
+        run: docker stats --no-stream --format 'table {{.Name}}\t{{.MemUsage}}\t{{.CPUPerc}}'
+      - name: Dump logs on failure
+        if: failure()
+        run: |
+          docker compose --profile lite ps
+          for s in $(docker compose --profile lite ps --services); do echo "=== $s"; docker compose --profile lite logs --tail=200 "$s"; done
+      - if: always()
+        run: make clean FORCE=1

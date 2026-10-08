@@ -1,0 +1,8 @@
+title = "edge-to-trace"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Generated local secrets are gitignored; never scanned as repo content"
+paths = ['''(^|/)\.env$''']

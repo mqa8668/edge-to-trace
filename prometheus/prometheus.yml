@@ -1,0 +1,44 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+otlp:
+  promote_resource_attributes: [service.name, service.namespace, deployment.environment.name]
+  keep_identifying_resource_attributes: true
+
+storage:
+  tsdb:
+    out_of_order_time_window: 30m
+  exemplars:
+    max_exemplars: 100000
+
+rule_files:
+  - rules/*.yml
+  - rules/slo/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: [alertmanager:9093]
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs: [{targets: ["localhost:9090"]}]
+  - job_name: alertmanager
+    static_configs: [{targets: ["alertmanager:9093"]}]
+  - job_name: otel-collector
+    static_configs: [{targets: ["otel-collector:8888"]}]
+  - job_name: loki
+    static_configs: [{targets: ["loki:3100"]}]
+  - job_name: tempo
+    static_configs: [{targets: ["tempo:3200"]}]
+  - job_name: alloy
+    static_configs: [{targets: ["alloy:12345"]}]
+  - job_name: grafana
+    static_configs: [{targets: ["grafana:3000"]}]
+  - job_name: beyla
+    static_configs: [{targets: ["beyla:8999"]}]
+  - job_name: postgres-exporter
+    static_configs: [{targets: ["postgres-exporter:9187"]}]
+  - job_name: alert-sink
+    static_configs: [{targets: ["alert-sink:9095"]}]

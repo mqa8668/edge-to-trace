@@ -1,0 +1,64 @@
+name: apps
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  unit-and-build:
+    name: ${{ matrix.app }} (amd64)
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [catalog, recs, storefront, alert-sink]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Unit tests (test stage of the Dockerfile)
+        run: docker build --target test apps/${{ matrix.app }}
+      - name: Build runtime image
+        run: docker build -t e2t/${{ matrix.app }}:ci apps/${{ matrix.app }}
+
+  stack-boots:
+    name: compose boots (amd64)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: make up
+      - name: Storefront path reaches catalog and recs
+        run: |
+          curl -fsS localhost:8080/api/products/1 | tee body.json
+          grep -q '"recommendations":\[{' body.json
+          grep -q '"degraded":false' body.json
+      - name: Logs carry trace ids
+        run: |
+          curl -fsS -H 'traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' localhost:8080/api/products/2 >/dev/null
+          for s in storefront recs catalog; do
+            docker compose --profile lite logs --no-log-prefix "$s" | grep -q 4bf92f3577b34da6a3ce929d0e0e4736 || { echo "no trace_id in $s logs"; exit 1; }
+          done
+      - if: failure()
+        run: docker compose --profile lite ps && docker compose --profile lite logs --tail=200
+      - if: always()
+        run: make clean FORCE=1
+
+  # Non-blocking: backs the "runs on Apple Silicon / arm64" claim without gating merges.
+  arm64:
+    name: unit tests and boot (arm64, non-blocking)
+    runs-on: ubuntu-24.04-arm
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: make test
+      - run: make up
+      - run: curl -fsS localhost:8080/api/products/1 | grep -q '"degraded":false'
+      - if: failure()
+        run: docker compose --profile lite logs --tail=200
+      - if: always()
+        run: make clean FORCE=1

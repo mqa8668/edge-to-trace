@@ -1,0 +1,38 @@
+rule_files:
+  - ../../prometheus/rules/platform.yml
+evaluation_interval: 15s
+tests:
+  - interval: 15s
+    input_series:
+      - series: 'up{job="loki"}'
+        values: '1x4 0x30'
+      - series: 'pg_up'
+        values: '1x4 0x30'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: Watchdog
+        exp_alerts:
+          - exp_labels: {severity: none}
+            exp_annotations:
+              summary: "Dead man's switch, always firing"
+              runbook_url: https://github.com/mqa8668/edge-to-trace/blob/main/docs/runbooks/watchdog.md
+      - eval_time: 2m
+        alertname: TargetDown
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: TargetDown
+        exp_alerts:
+          - exp_labels: {severity: ticket, job: loki}
+            exp_annotations:
+              summary: "Scrape target loki is down"
+              runbook_url: https://github.com/mqa8668/edge-to-trace/blob/main/docs/runbooks/target-down.md
+      - eval_time: 2m
+        alertname: PostgresDown
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: PostgresDown
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: Postgres is unreachable from the exporter
+              runbook_url: https://github.com/mqa8668/edge-to-trace/blob/main/docs/runbooks/postgres-down.md

@@ -1,0 +1,31 @@
+name: scenario
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  scenario:
+    name: chaos to alert to trace to resolve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run the guided demo (fails if the page does not fire within 10 minutes)
+        env:
+          BASELINE_SECONDS: "180"
+        shell: bash
+        run: make demo 2>&1 | tee demo.log
+      - name: The slowest span of the exemplar trace is the injected one
+        run: grep -E "recs.rank_candidates" demo.log
+      - name: Reset and wait for the resolved notification
+        run: timeout 2400 make demo-reset WAIT=1
+      - if: failure()
+        run: |
+          docker compose --profile lite ps
+          docker compose --profile lite logs --tail=200
+      - if: always()
+        run: make clean FORCE=1

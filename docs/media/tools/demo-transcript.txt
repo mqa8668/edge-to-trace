@@ -1,0 +1,62 @@
+
+[1m1. Waiting for the stack[0m
+^@Stack is up. k6 is sending about 5 requests per second to the storefront.
+
+[1m2. Baseline traffic (2 s)[0m
+Dashboard: http://localhost:3000/d/e2t-overview?refresh=10s   (user admin, password in .env, or just browse as anonymous viewer)
+
+    0 / 2 s
+
+[1m3. Injecting latency into recs (800 ms on 60% of calls)[0m
+{"active":true,"config":{"latency_ms":800,"latency_ratio":0.6,"error_ratio":0.0,"ttl_seconds":900},"remaining_seconds":899}
+chaos: 800 ms on 60% of calls to recs; auto-expires in 15 min
+What happens next: storefront waits at most 400 ms for recs, so requests slow down, the share over 300 ms
+climbs, and the multi-window burn rate crosses 14.4x on both the 1h and 5m windows.
+
+[1m4. Waiting for the page: StorefrontLatencyBurn (up to 10 min)[0m
+
+    2 s
+    7 s
+   12 s
+   17 s
+   22 s
+   27 s
+   32 s
+   37 s
+   42 s
+   47 s
+   52 s
+   57 s
+   62 s
+   67 s
+   72 s
+   77 s
+   82 s
+   87 s
+   92 s
+[1mFired after 97 s. This is what Telegram (or any chat) shows:[0m
+
+    PAGE: StorefrontLatencyBurn
+    storefront latency SLO error budget burn rate is over expected.
+    SLO: storefront latency, objective 99%
+    Burn rate: 6.9x   Error budget left: 54.56%
+    Since: 09:49:11 UTC
+    Dashboard: http://localhost:3000/d/e2t-slo?var-slo=latency
+    Runbook: https://github.com/mqa8668/edge-to-trace/blob/main/docs/runbooks/storefront-latency-burn.md
+    Traces: http://localhost:3000/explore?schemaVersion=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22storefront%5C%22%20%26%26%20duration%20%3E%20300ms%20%7D%22%7D%5D%7D%7D
+    
+
+[1m5. From the alert to the slow span[0m
+Slowest exemplar trace: 81125e6e21635e6edb97f4788db8ed9a
+      811.3 ms  recs       GET /recommendations
+      801.0 ms  recs       recs.rank_candidates
+
+  Trace in Tempo:   http://localhost:3000/explore?schemaVersion=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%2281125e6e21635e6edb97f4788db8ed9a%22%7D%5D%7D%7D
+  Logs of the trace: http://localhost:3000/explore?schemaVersion=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22loki%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22loki%22%2C%22uid%22%3A%22loki%22%7D%2C%22expr%22%3A%22%7Bservice_name%3D~%5C%22.%2B%5C%22%7D%20%7C%20trace_id%3D%5C%2281125e6e21635e6edb97f4788db8ed9a%5C%22%22%7D%5D%7D%7D
+  Overview:          http://localhost:3000/d/e2t-overview?from=1791452566000&to=now&refresh=10s
+  SLO detail:        http://localhost:3000/d/e2t-slo?var-slo=latency&from=1791452566000&to=now&refresh=10s
+  Alerts:            http://localhost:9095/alerts?alertname=StorefrontLatencyBurn     Alertmanager: http://localhost:9093
+  Runbook:           docs/runbooks/storefront-latency-burn.md
+
+[1m6. Clean up[0m
+The fault expires on its own after 15 minutes. To end it now:  make demo-reset   (WAIT=1 to wait for the resolve)

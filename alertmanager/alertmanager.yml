@@ -1,0 +1,34 @@
+templates:
+  - /etc/alertmanager/templates/*.tmpl
+
+route:
+  receiver: sink
+  group_by: [alertname, sloth_service, sloth_slo]
+  group_wait: 10s
+  group_interval: 30s
+  repeat_interval: 4h
+  routes:
+    - matchers: [alertname="Watchdog"]
+      receiver: sink
+      repeat_interval: 1m
+    # Synthetic test alerts (scripts/smoke.sh) stay in the sink and never reach Telegram.
+    - matchers: [synthetic="true"]
+      receiver: sink
+    - matchers: [severity="page"]
+      receiver: page
+    - matchers: [severity="ticket"]
+      receiver: ticket
+
+# The page does not inhibit the ticket of the same SLO: an inhibited alert is never notified when it
+# resolves, which would leave a dangling ticket in Telegram. Page and ticket are separate topics anyway.
+inhibit_rules:
+  - source_matchers: [alertname="PostgresDown"]
+    target_matchers: [alertname="StorefrontAvailabilityBurn", severity="ticket"]
+
+receivers:
+  - name: sink
+    webhook_configs: [{url: "http://alert-sink:9095/webhook"}]
+  - name: page
+    webhook_configs: [{url: "http://alert-sink:9095/webhook"}]
+  - name: ticket
+    webhook_configs: [{url: "http://alert-sink:9095/webhook"}]

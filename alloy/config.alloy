@@ -1,0 +1,58 @@
+discovery.docker "containers" {
+	host             = "tcp://docker-socket-proxy:2375"
+	refresh_interval = "10s"
+}
+
+discovery.relabel "e2t" {
+	targets = discovery.docker.containers.targets
+
+	rule {
+		source_labels = ["__meta_docker_container_label_e2t_logs"]
+		regex         = "true"
+		action        = "keep"
+	}
+
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+		target_label  = "service_name"
+	}
+
+	rule {
+		source_labels = ["__meta_docker_container_name"]
+		regex         = "/(.*)"
+		target_label  = "container"
+	}
+}
+
+loki.source.docker "e2t" {
+	host             = "tcp://docker-socket-proxy:2375"
+	targets          = discovery.relabel.e2t.output
+	forward_to       = [loki.process.e2t.receiver]
+	refresh_interval = "10s"
+}
+
+loki.process "e2t" {
+	stage.json {
+		expressions = {level = "level", trace_id = "trace_id", span_id = "span_id", path = "path"}
+	}
+
+	stage.labels {
+		values = {level = ""}
+	}
+
+	stage.structured_metadata {
+		values = {trace_id = "", span_id = ""}
+	}
+
+	stage.drop {
+		source     = "path"
+		expression = "^/(healthz|readyz)$"
+	}
+	forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+	endpoint {
+		url = "http://loki:3100/loki/api/v1/push"
+	}
+}

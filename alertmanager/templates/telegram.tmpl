@@ -1,0 +1,26 @@
+{{ define "e2t.telegram" -}}
+{{ range .Alerts -}}
+{{ if eq .Status "resolved" }}✅ <b>RESOLVED · {{ .Labels.alertname }}</b>
+{{- else if eq .Labels.severity "page" }}🔴 <b>PAGE · {{ .Labels.alertname }}</b>
+{{- else if eq .Labels.severity "ticket" }}🟠 <b>TICKET · {{ .Labels.alertname }}</b>
+{{- else }}⚪ <b>{{ .Labels.severity | toUpper }} · {{ .Labels.alertname }}</b>{{ end }}
+{{ if .Labels.sloth_slo -}}
+<code>SLO   </code> {{ .Labels.sloth_slo }}{{ if .Annotations.slo_objective }} · {{ .Annotations.slo_objective }}{{ end }}
+{{ if and .Annotations.burn_rate (ne .Status "resolved") -}}
+{{ $b := .Annotations.budget_left | reReplaceAll "[.].*$" "" -}}
+<code>Burn  </code> {{ .Annotations.burn_rate | reReplaceAll "x$" "×" }}{{ if .Annotations.burn_window }} over {{ .Annotations.burn_window }}{{ end }}{{ if eq .Annotations.budget_left "0.00" }} · budget exhausted{{ else if eq $b "0" }} · budget &lt;1% left{{ else if .Annotations.budget_left }} · budget {{ $b }}% left{{ end }}
+{{ end -}}
+{{ else if .Annotations.summary -}}
+<code>What  </code> {{ .Annotations.summary }}
+{{ end -}}
+{{ $d := since .StartsAt }}{{ if eq .Status "resolved" }}{{ $d = .EndsAt.Sub .StartsAt }}{{ end -}}
+<code>Since </code> {{ .StartsAt.UTC.Format "15:04" }} UTC ({{ if eq .Status "resolved" }}{{ if lt $d 1000000000 }}fired briefly{{ else }}fired for {{ $d.Round 1000000000 | humanizeDuration | reReplaceAll " [0-9]+s$" "" }}{{ end }}{{ else }}{{ if lt $d 1000000000 }}firing just now{{ else }}firing {{ $d.Round 1000000000 | humanizeDuration | reReplaceAll " [0-9]+s$" "" }}{{ end }}{{ end }})
+{{ $sep := "" -}}
+{{ if .Annotations.dashboard_url }}{{ $sep }}<a href="{{ .Annotations.dashboard_url }}">Dashboard</a>{{ $sep = " · " }}{{ end -}}
+{{ if .Annotations.tempo_url }}{{ $sep }}<a href="{{ .Annotations.tempo_url }}">Traces</a>{{ $sep = " · " }}{{ end -}}
+{{ if .Annotations.runbook_url }}{{ $sep }}<a href="{{ .Annotations.runbook_url }}">Runbook</a>{{ end }}
+{{ end -}}
+{{ end }}
+{{ define "e2t.telegram.heartbeat" -}}
+💓 Watchdog alive · pipeline Prometheus → Alertmanager → Telegram OK
+{{- end }}

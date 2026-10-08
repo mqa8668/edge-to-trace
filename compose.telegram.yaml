@@ -1,0 +1,29 @@
+# Adds Telegram delivery. Put the bot token and chat id in secrets/telegram_bot_token.txt and
+# secrets/telegram_chat_id.txt (gitignored). The Makefile includes this file when both exist.
+secrets:
+  telegram_bot_token: {file: ./secrets/telegram_bot_token.txt}
+  telegram_chat_id: {file: ./secrets/telegram_chat_id.txt}
+services:
+  alertmanager:
+    # Secret files are mode 600 and owned by you, so run as you (the Makefile exports E2T_UID and E2T_GID).
+    user: "${E2T_UID:-65534}:${E2T_GID:-65534}"
+    secrets: [telegram_bot_token, telegram_chat_id]
+    # Optional forum topics (message_thread_id). Unset or 0 sends to the main chat. Set them in .env.
+    environment:
+      TELEGRAM_THREAD_PAGE: ${TELEGRAM_THREAD_PAGE:-0}
+      TELEGRAM_THREAD_TICKET: ${TELEGRAM_THREAD_TICKET:-0}
+      TELEGRAM_THREAD_HEARTBEAT: ${TELEGRAM_THREAD_HEARTBEAT:-0}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        sed -e "s/^\( *message_thread_id:\) 0 # thread:page/\1 $${TELEGRAM_THREAD_PAGE:-0}/" \
+            -e "s/^\( *message_thread_id:\) 0 # thread:ticket/\1 $${TELEGRAM_THREAD_TICKET:-0}/" \
+            -e "s/^\( *message_thread_id:\) 0 # thread:heartbeat/\1 $${TELEGRAM_THREAD_HEARTBEAT:-0}/" \
+            /etc/alertmanager/alertmanager.yml > /am-config/config.yml
+        exec /bin/alertmanager "$$@"
+      - alertmanager
+    tmpfs: ["/am-config:uid=${E2T_UID:-65534},gid=${E2T_GID:-65534},mode=0700"]
+    command: [--config.file=/am-config/config.yml, --storage.path=/alertmanager]
+    volumes:
+      - ./alertmanager/alertmanager.telegram.yml:/etc/alertmanager/alertmanager.yml:ro
